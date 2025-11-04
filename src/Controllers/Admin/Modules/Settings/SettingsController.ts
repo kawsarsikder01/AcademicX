@@ -77,8 +77,8 @@ export class SettingsController extends Controller {
 
     await this.settingsModel.update(settings.id, data);
 
-    const updatedSettings = await this.settingsModel.find(settings.id);
+    
 
-    return this.json(response, updatedSettings);
+    return this.json(response, "Update settings successfully");
   }
 }

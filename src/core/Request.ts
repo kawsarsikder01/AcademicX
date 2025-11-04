@@ -1,0 +1,40 @@
+// src/Request.ts
+import { IncomingMessage, ServerResponse } from "http";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+class Request {
+  private static storage = new AsyncLocalStorage<Request>();
+  public req: IncomingMessage;
+  public res: ServerResponse;
+
+  constructor(req: IncomingMessage, res: ServerResponse) {
+    this.req = req;
+    this.res = res;
+  }
+
+  static run(req: IncomingMessage, res: ServerResponse, callback: () => void) {
+    const requestInstance = new Request(req, res);
+    this.storage.run(requestInstance, callback);
+  }
+
+  static current(): Request {
+    const store = this.storage.getStore();
+    if (!store) throw new Error("No current request available");
+    return store;
+  }
+
+  get query(): URLSearchParams {
+    const url = new URL(this.req.url!, `http://${this.req.headers.host}`);
+    return url.searchParams;
+  }
+
+  get params(): Record<string, string> {
+    return (this.req as any).params || {};
+  }
+
+  get body(): any {
+    return (this.req as any).body;
+  }
+}
+
+export { Request };

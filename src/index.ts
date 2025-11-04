@@ -6,6 +6,8 @@ import dotenv from "dotenv";
 dotenv.config();
 import http from "http";
 import "./routes/api";
+import "./routes/admin";
+import "./routes/vendor";
 import { Router } from "./core/Router";
 
 const PORT = process.env.PORT || 3000;

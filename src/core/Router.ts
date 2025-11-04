@@ -2,8 +2,9 @@
 import fs from "fs";
 import path from "path";
 import { Cache } from "./Cache";
+import { Request } from "./Request";
 
-type Middleware = (req: any, res: any, next: () => void) => void;
+export type Middleware = (req: any, res: any, next: () => void) => void;
 type ControllerAction = [new () => any, string];
 type Action = ((req: any, res: any) => void) | ControllerAction;
 
@@ -35,7 +36,8 @@ export class Router {
   private static middlewareGroups: Record<string, string[]> = {};
   private static _currentPrefix: string = "";
   private static _currentGroupMiddleware: Middleware[] = [];
-  private static fileCache: Record<string, { content: Buffer; mtime: number }> = {};
+  private static fileCache: Record<string, { content: Buffer; mtime: number }> =
+    {};
   private static routeCache = new Cache<TrieNode>(DEV_MODE);
 
   // ---------------- Named Middleware ----------------
@@ -73,7 +75,9 @@ export class Router {
     if (prefix && !prefix.startsWith("/")) prefix = "/" + prefix;
     this._currentPrefix = previousPrefix + prefix;
 
-    const groupMiddleware = (options.middleware || []).map((n) => this.getMiddleware(n));
+    const groupMiddleware = (options.middleware || []).map((n) =>
+      this.getMiddleware(n)
+    );
     this._currentGroupMiddleware = [...previousMiddleware, ...groupMiddleware];
 
     callback();
@@ -83,13 +87,23 @@ export class Router {
   }
 
   // ---------------- Register Route ----------------
-  private static registerRoute(method: string, uri: string, action: Action, middleware: Middleware[]) {
+  private static registerRoute(
+    method: string,
+    uri: string,
+    action: Action,
+    middleware: Middleware[]
+  ) {
     if (!uri.startsWith("/")) uri = "/" + uri;
     let fullUri = (this._currentPrefix + uri).replace(/\/+/g, "/");
-    if (fullUri !== "/" && fullUri.endsWith("/")) fullUri = fullUri.slice(0, -1);
+    if (fullUri !== "/" && fullUri.endsWith("/"))
+      fullUri = fullUri.slice(0, -1);
 
     const combinedMiddleware = [...this._currentGroupMiddleware, ...middleware];
-    const route: Route = { uri: fullUri, action, middleware: combinedMiddleware };
+    const route: Route = {
+      uri: fullUri,
+      action,
+      middleware: combinedMiddleware,
+    };
 
     const segments = fullUri.split("/").filter(Boolean);
     if (!this.trie[method]) this.trie[method] = { children: new Map() };
@@ -97,10 +111,12 @@ export class Router {
 
     for (const seg of segments) {
       if (seg.startsWith(":")) {
-        if (!node.paramChild) node.paramChild = { children: new Map(), paramName: seg.slice(1) };
+        if (!node.paramChild)
+          node.paramChild = { children: new Map(), paramName: seg.slice(1) };
         node = node.paramChild;
       } else {
-        if (!node.children.has(seg)) node.children.set(seg, { children: new Map() });
+        if (!node.children.has(seg))
+          node.children.set(seg, { children: new Map() });
         node = node.children.get(seg)!;
       }
     }
@@ -109,28 +125,50 @@ export class Router {
   }
 
   // ---------------- GET/POST/PUT/DELETE ----------------
-  static get(uri: string, action: Action, middleware: Middleware[] = []) { this.registerRoute("GET", uri, action, middleware); }
-  static post(uri: string, action: Action, middleware: Middleware[] = []) { this.registerRoute("POST", uri, action, middleware); }
-  static put(uri: string, action: Action, middleware: Middleware[] = []) { this.registerRoute("PUT", uri, action, middleware); }
-  static delete(uri: string, action: Action, middleware: Middleware[] = []) { this.registerRoute("DELETE", uri, action, middleware); }
+  static get(uri: string, action: Action, middleware: Middleware[] = []) {
+    this.registerRoute("GET", uri, action, middleware);
+  }
+  static post(uri: string, action: Action, middleware: Middleware[] = []) {
+    this.registerRoute("POST", uri, action, middleware);
+  }
+  static put(uri: string, action: Action, middleware: Middleware[] = []) {
+    this.registerRoute("PUT", uri, action, middleware);
+  }
+  static delete(uri: string, action: Action, middleware: Middleware[] = []) {
+    this.registerRoute("DELETE", uri, action, middleware);
+  }
 
   // ---------------- Dispatch ----------------
   static dispatch(uri: string, method: string, req: any, res: any) {
-    const methodTrie = this.trie[method.toUpperCase()];
-    if (!methodTrie) { res.statusCode = 405; res.end(JSON.stringify({ message: "Method Not Allowed" })); return; }
+    Request.run(req, res, () => {
+      const methodTrie = this.trie[method.toUpperCase()];
+      if (!methodTrie) {
+        res.statusCode = 405;
+        res.end(JSON.stringify({ message: "Method Not Allowed" }));
+        return;
+      }
 
-    // Normalize URI (remove trailing slash except for root)
-    if (uri !== "/" && uri.endsWith("/")) uri = uri.slice(0, -1);
+      // Normalize URI (remove trailing slash except for root)
+      if (uri !== "/" && uri.endsWith("/")) uri = uri.slice(0, -1);
 
-    const { route, params } = this.searchRoute(methodTrie, uri);
-    if (!route) { res.statusCode = 404; res.end(JSON.stringify({ message: "Route not found" })); return; }
+      const { route, params } = this.searchRoute(methodTrie, uri);
+      if (!route) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ message: "Route not found" }));
+        return;
+      }
 
-    req.params = params;
+      req.params = params;
 
-    const middlewareChain = [...this.globalMiddleware, ...route.middleware];
-    let i = 0;
-    const next = () => { const mw = middlewareChain[i++]; if (mw) mw(req, res, next); else this.executeAction(route.action, req, res); };
-    next();
+      const middlewareChain = [...this.globalMiddleware, ...route.middleware];
+      let i = 0;
+      const next = () => {
+        const mw = middlewareChain[i++];
+        if (mw) mw(req, res, next);
+        else this.executeAction(route.action, req, res);
+      };
+      next();
+    });
   }
 
   // ---------------- Search Route in Trie ----------------
@@ -142,8 +180,10 @@ export class Router {
     for (const seg of segments) {
       if (!current) return { route: undefined, params };
       if (current.children.has(seg)) current = current.children.get(seg);
-      else if (current.paramChild) { current = current.paramChild; params[current.paramName!] = seg; }
-      else return { route: undefined, params };
+      else if (current.paramChild) {
+        current = current.paramChild;
+        params[current.paramName!] = seg;
+      } else return { route: undefined, params };
     }
 
     return { route: current?.route, params };
@@ -151,13 +191,26 @@ export class Router {
 
   // ---------------- Execute Action ----------------
   private static executeAction(action: Action, req: any, res: any) {
-    if (typeof action === "function") action(req, res);
-    else if (Array.isArray(action)) {
+    if (typeof action === "function") {
+      action(req, res);
+    } else if (Array.isArray(action)) {
       const [ControllerClass, methodName] = action;
       const controller = new ControllerClass();
       const method = (controller as any)[methodName];
-      if (typeof method === "function") method.call(controller, req, res);
-      else { res.statusCode = 500; res.end(JSON.stringify({ message: `Controller method '${methodName}' not found` })); }
+
+      if (typeof method === "function") {
+        // Pass route params as function arguments, followed by req and res
+        // Example: update(req, res, id) -> id is last
+        const paramValues = Object.values(req.params || {});
+        method.call(controller, req, res, ...paramValues);
+      } else {
+        res.statusCode = 500;
+        res.end(
+          JSON.stringify({
+            message: `Controller method '${methodName}' not found`,
+          })
+        );
+      }
     }
   }
 
@@ -167,7 +220,11 @@ export class Router {
     const stats = fs.statSync(fullPath);
     const cached = this.fileCache[fullPath];
 
-    if (cached && cached.mtime === stats.mtimeMs && !DEV_MODE) { res.statusCode = 200; res.end(cached.content); return; }
+    if (cached && cached.mtime === stats.mtimeMs && !DEV_MODE) {
+      res.statusCode = 200;
+      res.end(cached.content);
+      return;
+    }
 
     const content = fs.readFileSync(fullPath);
     if (!DEV_MODE) this.fileCache[fullPath] = { content, mtime: stats.mtimeMs };

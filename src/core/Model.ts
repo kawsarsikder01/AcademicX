@@ -1,5 +1,6 @@
 // src/Model.ts
 import { db } from "./Db";
+import { Request } from "./Request";
 
 export type RelationConfig = {
   type: "hasOne" | "hasMany" | "belongsToMany";
@@ -17,9 +18,88 @@ export type WithOption = string | { [relation: string]: string[] };
 export class Model {
   table: string;
   private _withRelations: WithOption[] = [];
+  private _conditions: Record<string, any> = {};
+  private _columns?: string[] | string;
 
   constructor(table: string) {
     this.table = table;
+  }
+
+  /** Paginate results based on previously set WHERE */
+  wheres(conditions: Record<string, any>, columns?: string[] | string) {
+    this._conditions = conditions;
+    this._columns = columns;
+    return this;
+  }
+
+  async paginate(defaultPerPage = 10) {
+    const req = Request.current(); // Get current request
+
+    // Read from query params
+    const page = parseInt(req.query.get("page") || "1", 10);
+    const perPage = parseInt(
+      req.query.get("perPage") || defaultPerPage.toString(),
+      10
+    );
+
+    const offset = (page - 1) * perPage;
+    const baseUrl = process.env.BASE_URL;
+
+    // Prepare WHERE clause
+    const keys = Object.keys(this._conditions);
+    const values = Object.values(this._conditions);
+    const whereClause =
+      keys.length > 0
+        ? "WHERE " + keys.map((k) => `\`${k}\` = ?`).join(" AND ")
+        : "";
+
+    // Count total records
+    const [countRows] = await db.query(
+      `SELECT COUNT(*) as total FROM \`${this.table}\` ${whereClause}`,
+      values
+    );
+    const total = (countRows as any[])[0].total;
+    const lastPage = Math.ceil(total / perPage);
+
+    // Fetch data for current page
+    const [rows] = await db.query(
+      `
+    SELECT ${this.formatColumns(this._columns)} 
+    FROM \`${this.table}\`
+    ${whereClause}
+    LIMIT ? OFFSET ?
+  `,
+      [...values, perPage, offset]
+    );
+
+    const data = await this.loadRelations(rows as any[]);
+
+    // Build pagination URLs
+    const nextPage = page < lastPage ? page + 1 : null;
+    const prevPage = page > 1 ? page - 1 : null;
+
+    const nextPageUrl = nextPage
+      ? `${baseUrl}?page=${nextPage}&perPage=${perPage}`
+      : null;
+    const prevPageUrl = prevPage
+      ? `${baseUrl}?page=${prevPage}&perPage=${perPage}`
+      : null;
+
+    // Clear temporary query state after execution
+    this._conditions = {};
+    this._columns = undefined;
+
+    return {
+      data,
+      pagination: {
+        total,
+        perPage,
+        currentPage: page,
+        lastPage,
+        nextPageUrl,
+        prevPageUrl,
+      },
+    };
   }
 
   // ---------------- Helper: Format SELECT columns ----------------
@@ -79,8 +159,12 @@ export class Model {
             SELECT ${this.formatColumns(columns || relConfig.columns)} 
             FROM \`${target.table}\`
             JOIN \`${relConfig.pivotTable}\` 
-              ON \`${target.table}\`.id = \`${relConfig.pivotTable}\`.\`${relConfig.relatedPivotKey}\`
-            WHERE \`${relConfig.pivotTable}\`.\`${relConfig.foreignPivotKey}\` = ?
+              ON \`${target.table}\`.id = \`${relConfig.pivotTable}\`.\`${
+            relConfig.relatedPivotKey
+          }\`
+            WHERE \`${relConfig.pivotTable}\`.\`${
+            relConfig.foreignPivotKey
+          }\` = ?
           `;
           const [rows] = await db.query(query, [
             record[relConfig.localKey || "id"],
@@ -106,7 +190,9 @@ export class Model {
   /** Find by ID */
   async find(id: number | string, columns?: string[] | string) {
     const [rows] = await db.query(
-      `SELECT ${this.formatColumns(columns)} FROM \`${this.table}\` WHERE id = ? LIMIT 1`,
+      `SELECT ${this.formatColumns(columns)} FROM \`${
+        this.table
+      }\` WHERE id = ? LIMIT 1`,
       [id]
     );
     return this.loadRelations((rows as any[])[0] || null);
@@ -122,7 +208,9 @@ export class Model {
     const whereClause = keys.map((k) => `\`${k}\` = ?`).join(" AND ");
 
     const [rows] = await db.query(
-      `SELECT ${this.formatColumns(columns)} FROM \`${this.table}\` WHERE ${whereClause}`,
+      `SELECT ${this.formatColumns(columns)} FROM \`${
+        this.table
+      }\` WHERE ${whereClause}`,
       values
     );
     return this.loadRelations(rows as any[]);
@@ -266,5 +354,26 @@ export class Model {
       return await this.find(existing.id);
     }
     return await this.create({ ...conditions, ...values });
+  }
+
+  async findOne(
+    conditions: Record<string, any> = {},
+    columns?: string[] | string
+  ): Promise<any | null> {
+    const keys = Object.keys(conditions);
+    if (keys.length === 0) return null;
+
+    const whereClause = keys.map((k) => `\`${k}\` = ?`).join(" OR ");
+    const values = Object.values(conditions);
+
+    const query = `
+    SELECT ${columns ? this.formatColumns(columns) : "*"}
+    FROM \`${this.table}\`
+    WHERE ${whereClause}
+    LIMIT 1
+  `;
+
+    const [rows] = await db.query(query, values);
+    return (rows as any[])[0] || null;
   }
 }
