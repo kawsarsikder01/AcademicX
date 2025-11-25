@@ -37,7 +37,7 @@ export class CategoryController extends Controller {
     };
 
    
-    await this.categoryModel.create(data);
+     const category = await this.categoryModel.create(data); 
 
     return this.json(response, "Category create successfully");
   }

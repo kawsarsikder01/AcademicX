@@ -14,6 +14,8 @@ Router.group({ prefix: "api/admin" }, () => {
 
     //vendors
     Router.get("vendors",[VendorController,'index']);
+    Router.put("vendor/veify/:id",[VendorController,"verify"]);
+    Router.put("vendor/rejected/:id",[VendorController,"rejected"]);
 
     //category
     Router.get("categories",[CategoryController,'index']);

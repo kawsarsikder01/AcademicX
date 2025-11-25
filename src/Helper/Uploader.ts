@@ -4,18 +4,15 @@ import multer from "multer";
 import { ServerResponse } from "http";
 
 // ------------------ Configuration ------------------
-
 const ACTIVE_DISK = process.env.ACTIVE_DISK || "local"; // local | s3
 const UPLOAD_DIR = path.join(__dirname, "..", "uploads");
-const BASE_URL =
-  process.env.BASE_URL || "[http://localhost:5000](http://localhost:5000)";
+const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
 if (ACTIVE_DISK === "local" && !fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
 // ------------------ Multer Setup (only for local) ------------------
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -24,29 +21,40 @@ const storage = multer.diskStorage({
   },
 });
 
-export const upload = ACTIVE_DISK === "local" ? multer({ storage }) : undefined;
+export const upload =
+  ACTIVE_DISK === "local" ? multer({ storage }) : undefined;
 
 // ------------------ File Operations ------------------
-
 export const saveFile = async (
-  file: Express.Multer.File | { originalname: string; buffer: Buffer }
+  file?: any // Multer or PersistentFile
 ) => {
-   
-  // Local disk
-    const filePath = path.join(
-      UPLOAD_DIR,
-      Date.now() + "-" + file.originalname
-    );
-    fs.writeFileSync(
-      filePath,
-      (file as any).buffer || fs.readFileSync((file as any).path)
-    );
-    const relativePath = path
-      .relative(UPLOAD_DIR, filePath)
-      .replace(/\\/g, "/");
-    
-    return {path : relativePath, driver: ACTIVE_DISK};
+  if (!file) throw new Error("No file provided");
+
+  // Multer DiskStorage
+  if ("path" in file && file.path) {
+    const relativePath = path.relative(UPLOAD_DIR, file.path).replace(/\\/g, "/");
+    return { path: relativePath, driver: ACTIVE_DISK };
+  }
+
+  // Multer MemoryStorage
+  if ("buffer" in file && file.buffer) {
+    const filePath = path.join(UPLOAD_DIR, Date.now() + "-" + file.originalname);
+    fs.writeFileSync(filePath, file.buffer);
+    const relativePath = path.relative(UPLOAD_DIR, filePath).replace(/\\/g, "/");
+    return { path: relativePath, driver: ACTIVE_DISK };
+  }
+
+  // PersistentFile (formidable, etc)
+  if ("filepath" in file && "originalFilename" in file) {
+    const destPath = path.join(UPLOAD_DIR, Date.now() + "-" + file.originalFilename);
+    fs.copyFileSync(file.filepath, destPath);
+    const relativePath = path.relative(UPLOAD_DIR, destPath).replace(/\\/g, "/");
+    return { path: relativePath, driver: ACTIVE_DISK };
+  }
+
+  throw new Error("Invalid file object");
 };
+
 
 export const deleteFile = (fileUrlOrPath: string) => {
   if (ACTIVE_DISK === "local") {
@@ -65,12 +73,10 @@ export const deleteFile = (fileUrlOrPath: string) => {
       return false;
     }
   }
-
   if (ACTIVE_DISK === "s3") {
     // TODO: implement S3 delete
     return true;
   }
-
   return false;
 };
 
@@ -87,26 +93,24 @@ export const getFile = (filePathOrUrl: string) => {
         name: path.basename(fullPath),
         size: stats.size,
         extension: path.extname(fullPath),
-        url: `${BASE_URL}/uploads/${path
-          .relative(UPLOAD_DIR, fullPath)
-          .replace(/\\/g, "/")}`,
+        url: `${BASE_URL}/uploads/${path.relative(UPLOAD_DIR, fullPath).replace(
+          /\\/g,
+          "/"
+        )}`,
       };
     } catch (error) {
       console.error("Get file error:", error);
       return null;
     }
   }
-
   if (ACTIVE_DISK === "s3") {
-    // TODO: implement S3 get
     return {
       name: "file.jpg",
       size: 1024,
       extension: ".jpg",
-      url: "[https://s3.example.com/file.jpg](https://s3.example.com/file.jpg)",
+      url: "https://s3.example.com/file.jpg",
     };
   }
-
   return null;
 };
 
@@ -145,7 +149,6 @@ export const downloadFile = (res: ServerResponse, filePathOrUrl: string) => {
       }
     }
   }
-
   if (ACTIVE_DISK === "s3") {
     // TODO: implement S3 download
   }

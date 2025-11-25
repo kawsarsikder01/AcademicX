@@ -7,6 +7,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key";
 
 export interface AuthenticatedRequest extends IncomingMessage {
   user?: any; // decoded JWT user data
+  body?: any;
 }
 
 export const auth = async (

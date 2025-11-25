@@ -1,94 +1,126 @@
-// src/Model.ts
+// src/core/Model.ts
 import { db } from "./Db";
 import { Request } from "./Request";
 
-export type RelationConfig = {
-  type: "hasOne" | "hasMany" | "belongsToMany";
-  model: typeof Model;
-  foreignKey?: string;
-  localKey?: string;
-  pivotTable?: string;
-  foreignPivotKey?: string;
-  relatedPivotKey?: string;
-  columns?: string[] | string;
-};
+/* --------------------  TYPES  -------------------- */
+export type RelationConfig =
+  | {
+      type: "hasOne" | "hasMany" | "belongsTo" | "belongsToMany";
+      model: typeof Model;
+      foreignKey?: string;
+      localKey?: string;
+      pivotTable?: string;
+      foreignPivotKey?: string;
+      relatedPivotKey?: string;
+      columns?: string[] | string;
+    }
+  | {
+      type: "morphOne" | "morphMany";
+      model: typeof Model;
+      morphName: string;
+      columns?: string[] | string;
+    }
+  | {
+      type: "morphTo";
+      morphName: string;
+      modelResolver: (type: string) => typeof Model | null;
+    };
 
-export type WithOption = string | { [relation: string]: string[] };
+export type WithOption = string | { [relation: string]: string[] | string };
 
+/* --------------------  BASE MODEL  -------------------- */
 export class Model {
-  table: string;
-  private _withRelations: WithOption[] = [];
+  public table: string;
   private _conditions: Record<string, any> = {};
   private _columns?: string[] | string;
-
+  private _withRelations: WithOption[] = [];
+  private _whereIn: Record<string, any[]> = {};
   constructor(table: string) {
     this.table = table;
   }
 
-  /** Paginate results based on previously set WHERE */
-  wheres(conditions: Record<string, any>, columns?: string[] | string) {
-    this._conditions = conditions;
+  /* ============================================================
+   * QUERY BUILDER  (chainable)
+   * ============================================================ */
+  where(conditions: Record<string, any>, columns?: string[] | string) {
+    this._conditions = { ...this._conditions, ...conditions };
+    if (columns) this._columns = columns;
+    return this;
+  }
+
+  whereIn(column: string, values: any[]): this {
+    if (!values.length) return this; // skip empty
+    this._whereIn[column] = values;
+    return this;
+  }
+
+  select(columns: string[] | string) {
     this._columns = columns;
     return this;
   }
 
+  with(...relations: WithOption[]) {
+    this._withRelations.push(...relations);
+    return this;
+  }
+
+  /* ============================================================
+   * EXECUTION
+   * ============================================================ */
+  async get(): Promise<any[]> {
+    const { sql, values } = this.buildSelect();
+    const [rows] = await db.query(sql, values);
+    const out = await this.loadRelations(rows as any[]);
+    this.resetQuery();
+    return out;
+  }
+
+  async all(): Promise<any[]> {
+    return this.get();
+  }
+
+  async first(): Promise<any | null> {
+    const { sql, values } = this.buildSelect(1);
+    const [rows] = await db.query(sql, values);
+    const row = (rows as any[])[0] ?? null;
+    const out = await this.loadRelations(row);
+    this.resetQuery();
+    return out;
+  }
+
+  async find(id: number | string, pk = "id") {
+    const [rows] = await db.query(
+      `SELECT ${this.formatColumns(this._columns)} FROM \`${
+        this.table
+      }\` WHERE \`${pk}\` = ? LIMIT 1`,
+      [id]
+    );
+    const row = (rows as any[])[0] ?? null;
+    const out = await this.loadRelations(row);
+    this.resetQuery();
+    return out;
+  }
+
   async paginate(defaultPerPage = 10) {
-    const req = Request.current(); // Get current request
-
-    // Read from query params
-    const page = parseInt(req.query.get("page") || "1", 10);
-    const perPage = parseInt(
-      req.query.get("perPage") || defaultPerPage.toString(),
-      10
+    const req = Request.current();
+    const page = Math.max(1, Number(req.query.get("page") || 1));
+    const perPage = Math.max(
+      1,
+      Number(req.query.get("perPage") || defaultPerPage)
     );
-
     const offset = (page - 1) * perPage;
-    const baseUrl = process.env.BASE_URL;
 
-    // Prepare WHERE clause
-    const keys = Object.keys(this._conditions);
-    const values = Object.values(this._conditions);
-    const whereClause =
-      keys.length > 0
-        ? "WHERE " + keys.map((k) => `\`${k}\` = ?`).join(" AND ")
-        : "";
-
-    // Count total records
-    const [countRows] = await db.query(
-      `SELECT COUNT(*) as total FROM \`${this.table}\` ${whereClause}`,
-      values
-    );
-    const total = (countRows as any[])[0].total;
+    const { sql: cntSql, values: cntVals } = this.buildCount();
+    const [cntRows] = await db.query(cntSql, cntVals);
+    const total = (cntRows as any[])[0].total;
     const lastPage = Math.ceil(total / perPage);
 
-    // Fetch data for current page
-    const [rows] = await db.query(
-      `
-    SELECT ${this.formatColumns(this._columns)} 
-    FROM \`${this.table}\`
-    ${whereClause}
-    LIMIT ? OFFSET ?
-  `,
-      [...values, perPage, offset]
-    );
-
+    const { sql, values } = this.buildSelect(perPage, offset);
+    const [rows] = await db.query(sql, values);
     const data = await this.loadRelations(rows as any[]);
+    this.resetQuery();
 
-    // Build pagination URLs
-    const nextPage = page < lastPage ? page + 1 : null;
-    const prevPage = page > 1 ? page - 1 : null;
-
-    const nextPageUrl = nextPage
-      ? `${baseUrl}?page=${nextPage}&perPage=${perPage}`
-      : null;
-    const prevPageUrl = prevPage
-      ? `${baseUrl}?page=${prevPage}&perPage=${perPage}`
-      : null;
-
-    // Clear temporary query state after execution
-    this._conditions = {};
-    this._columns = undefined;
-
+    const base = (process.env.BASE_URL || "").replace(/\/$/, "");
     return {
       data,
       pagination: {
@@ -96,284 +128,332 @@ export class Model {
         perPage,
         currentPage: page,
         lastPage,
-        nextPageUrl,
-        prevPageUrl,
+        nextPageUrl:
+          page < lastPage
+            ? `${base}?page=${page + 1}&perPage=${perPage}`
+            : null,
+        prevPageUrl:
+          page > 1 ? `${base}?page=${page - 1}&perPage=${perPage}` : null,
       },
     };
   }
 
-  // ---------------- Helper: Format SELECT columns ----------------
-  protected formatColumns(columns?: string[] | string): string {
-    if (!columns) return "*";
-    if (typeof columns === "string") return columns;
-    return columns.map((c) => `\`${c}\``).join(", ");
-  }
-
-  // ---------------- Relation: eager loading ----------------
-  with(...relations: WithOption[]) {
-    this._withRelations = relations;
-    return this;
-  }
-
-  private async loadRelations(records: any[] | any): Promise<any> {
-    if (!records || this._withRelations.length === 0) return records;
-    const isArray = Array.isArray(records);
-    const data = isArray ? records : [records];
-
-    for (const relationOption of this._withRelations) {
-      let relationName: string;
-      let columns: string[] | undefined;
-
-      if (typeof relationOption === "string") {
-        relationName = relationOption;
-      } else {
-        relationName = Object.keys(relationOption)[0];
-        columns = relationOption[relationName];
-      }
-
-      if (typeof (this as any)[relationName] !== "function") continue;
-
-      for (const record of data) {
-        const relConfig: RelationConfig = (this as any)[relationName](record);
-        if (!relConfig) continue;
-
-        // ----- hasOne / hasMany -----
-        if (relConfig.type === "hasOne" || relConfig.type === "hasMany") {
-          const target = new relConfig.model(
-            relConfig.model.name.toLowerCase()
-          );
-          const results = await target.where(
-            { [relConfig.foreignKey!]: record[relConfig.localKey || "id"] },
-            columns || relConfig.columns
-          );
-          record[relationName] =
-            relConfig.type === "hasOne" ? results[0] || null : results;
-        }
-
-        // ----- belongsToMany -----
-        else if (relConfig.type === "belongsToMany") {
-          const target = new relConfig.model(
-            relConfig.model.name.toLowerCase()
-          );
-          const query = `
-            SELECT ${this.formatColumns(columns || relConfig.columns)} 
-            FROM \`${target.table}\`
-            JOIN \`${relConfig.pivotTable}\` 
-              ON \`${target.table}\`.id = \`${relConfig.pivotTable}\`.\`${
-            relConfig.relatedPivotKey
-          }\`
-            WHERE \`${relConfig.pivotTable}\`.\`${
-            relConfig.foreignPivotKey
-          }\` = ?
-          `;
-          const [rows] = await db.query(query, [
-            record[relConfig.localKey || "id"],
-          ]);
-          record[relationName] = rows;
-        }
-      }
-    }
-
-    return isArray ? data : data[0];
-  }
-
-  // ---------------- CRUD Methods ----------------
-
-  /** Get all records */
-  async all(columns: string[] | string = "*"): Promise<any[]> {
-    const [rows] = await db.query(
-      `SELECT ${this.formatColumns(columns)} FROM \`${this.table}\``
-    );
-    return rows as any[];
-  }
-
-  /** Find by ID */
-  async find(id: number | string, columns?: string[] | string) {
-    const [rows] = await db.query(
-      `SELECT ${this.formatColumns(columns)} FROM \`${
-        this.table
-      }\` WHERE id = ? LIMIT 1`,
-      [id]
-    );
-    return this.loadRelations((rows as any[])[0] || null);
-  }
-
-  /** Conditional WHERE query */
-  async where(
-    conditions: Record<string, any>,
-    columns?: string[] | string
-  ): Promise<any[]> {
-    const keys = Object.keys(conditions);
-    const values = Object.values(conditions);
-    const whereClause = keys.map((k) => `\`${k}\` = ?`).join(" AND ");
-
-    const [rows] = await db.query(
-      `SELECT ${this.formatColumns(columns)} FROM \`${
-        this.table
-      }\` WHERE ${whereClause}`,
-      values
-    );
-    return this.loadRelations(rows as any[]);
-  }
-
-  /** Find first record matching conditions */
-  async firstWhere(conditions: Record<string, any> = {}): Promise<any | null> {
-    const keys = Object.keys(conditions);
-    let query = `SELECT * FROM \`${this.table}\``;
-    let values: any[] = [];
-
-    if (keys.length > 0) {
-      const whereClause = keys.map((k) => `\`${k}\` = ?`).join(" AND ");
-      query += ` WHERE ${whereClause}`;
-      values = Object.values(conditions);
-    }
-
-    query += " LIMIT 1";
-    const [rows] = await db.query(query, values);
-    return (rows as any[])[0] || null;
-  }
-
-  /** Create new record */
+  /* ============================================================
+   * CRUD
+   * ============================================================ */
   async create(data: Record<string, any> = {}): Promise<any> {
-    if (Object.keys(data).length === 0) {
-      // Create blank row using DB defaults
-      const [result] = await db.query(
-        `INSERT INTO \`${this.table}\` () VALUES ()`
-      );
-      const insertId = (result as any).insertId;
-      const [rows] = await db.query(
-        `SELECT * FROM \`${this.table}\` WHERE id = ? LIMIT 1`,
-        [insertId]
-      );
-      return (rows as any[])[0];
+    const keys = Object.keys(data);
+    const vals = Object.values(data);
+
+    let sql: string;
+    if (keys.length) {
+      sql =
+        `INSERT INTO \`${this.table}\` (` +
+        keys.map((k) => `\`${k}\``).join(", ") +
+        ") VALUES (" +
+        vals.map(() => "?").join(", ") +
+        ")";
+    } else {
+      sql = `INSERT INTO \`${this.table}\` VALUES ROW()`; // MySQL 8
     }
 
-    const keys = Object.keys(data)
-      .map((k) => `\`${k}\``)
-      .join(", ");
-    const placeholders = Object.keys(data)
-      .map(() => "?")
-      .join(", ");
-    const values = Object.values(data);
-
-    const [result] = await db.query(
-      `INSERT INTO \`${this.table}\` (${keys}) VALUES (${placeholders})`,
-      values
-    );
-
-    const insertId = (result as any).insertId;
-    const [rows] = await db.query(
-      `SELECT * FROM \`${this.table}\` WHERE id = ? LIMIT 1`,
-      [insertId]
-    );
-    return (rows as any[])[0];
+    const [res] = await db.query(sql, vals);
+    return this.find((res as any).insertId);
   }
 
-  /** Update record by ID */
-  async update(id: number | string, data: Record<string, any>) {
-    const updates = Object.keys(data)
+  async update(id: number | string, data: Record<string, any>, pk = "id") {
+    const set = Object.keys(data)
       .map((k) => `\`${k}\` = ?`)
       .join(", ");
-    const values = [...Object.values(data), id];
-    const [result] = await db.query(
-      `UPDATE \`${this.table}\` SET ${updates} WHERE id = ?`,
-      values
-    );
-    return result;
+    await db.query(`UPDATE \`${this.table}\` SET ${set} WHERE \`${pk}\` = ?`, [
+      ...Object.values(data),
+      id,
+    ]);
+    return this.find(id, pk);
   }
 
-  /** Delete record by ID */
-  async delete(id: number | string) {
-    const [result] = await db.query(
-      `DELETE FROM \`${this.table}\` WHERE id = ?`,
-      [id]
-    );
-    return result;
+  async delete(id: number | string, pk = "id") {
+    await db.query(`DELETE FROM \`${this.table}\` WHERE \`${pk}\` = ?`, [id]);
   }
 
-  // ---------------- Relationships ----------------
-
-  hasOne(
-    TargetModel: typeof Model,
-    foreignKey: string,
-    localKey: string = "id"
-  ): RelationConfig {
-    return { type: "hasOne", model: TargetModel, foreignKey, localKey };
+  async firstWhere(conditions: Record<string, any> = {}): Promise<any | null> {
+    return this.where(conditions).first();
   }
 
-  hasMany(
-    TargetModel: typeof Model,
-    foreignKey: string,
-    localKey: string = "id"
-  ): RelationConfig {
-    return { type: "hasMany", model: TargetModel, foreignKey, localKey };
-  }
-
-  belongsToMany(
-    TargetModel: typeof Model,
-    pivotTable: string,
-    foreignPivotKey: string,
-    relatedPivotKey: string,
-    localKey: string = "id",
-    columns?: string[] | string
-  ): RelationConfig {
-    return {
-      type: "belongsToMany",
-      model: TargetModel,
-      pivotTable,
-      foreignPivotKey,
-      relatedPivotKey,
-      localKey,
-      columns,
-    };
-  }
-
-  // ---------------- Smart Helpers ----------------
-
-  /** Find first record or create new (with optional conditions) */
-  async firstOrNew(conditions?: Record<string, any>): Promise<any> {
-    if (conditions && Object.keys(conditions).length > 0) {
-      const existing = await this.firstWhere(conditions);
-      if (existing) return existing;
-      return await this.create(conditions);
-    }
-
-    const first = await this.firstWhere();
-    if (first) return first;
-    return await this.create();
-  }
-
-  /** Update if exists, else create */
   async updateOrCreate(
     conditions: Record<string, any>,
     values: Record<string, any>
-  ): Promise<any> {
-    const existing = await this.firstWhere(conditions);
-    if (existing) {
-      await this.update(existing.id, values);
-      return await this.find(existing.id);
+  ) {
+    const found = await this.firstWhere(conditions);
+    if (found) return this.update(found.id, values);
+    return this.create({ ...conditions, ...values });
+  }
+
+  async firstOrNew(conditions?: Record<string, any>): Promise<any> {
+    if (conditions && Object.keys(conditions).length) {
+      const found = await this.firstWhere(conditions);
+      if (found) return found;
+      return this.create(conditions);
     }
-    return await this.create({ ...conditions, ...values });
+    const found = await this.firstWhere();
+    if (found) return found;
+    return this.create();
   }
 
   async findOne(
     conditions: Record<string, any> = {},
     columns?: string[] | string
-  ): Promise<any | null> {
+  ) {
     const keys = Object.keys(conditions);
-    if (keys.length === 0) return null;
+    if (!keys.length) return null;
+    const where = keys.map((k) => `\`${k}\` = ?`).join(" OR ");
+    const [rows] = await db.query(
+      `SELECT ${this.formatColumns(columns)} FROM \`${
+        this.table
+      }\` WHERE ${where} LIMIT 1`,
+      Object.values(conditions)
+    );
+    return (rows as any[])[0] ?? null;
+  }
 
-    const whereClause = keys.map((k) => `\`${k}\` = ?`).join(" OR ");
-    const values = Object.values(conditions);
+  /* ============================================================
+   * RELATIONSHIP DECLARATIONS  (zero-arg methods)
+   * ============================================================ */
+  hasOne(Target: typeof Model, fk: string, localKey = "id"): RelationConfig {
+    return { type: "hasOne", model: Target, foreignKey: fk, localKey };
+  }
+  hasMany(Target: typeof Model, fk: string, localKey = "id"): RelationConfig {
+    return { type: "hasMany", model: Target, foreignKey: fk, localKey };
+  }
+  belongsTo(Target: typeof Model, fk: string, ownerKey = "id"): RelationConfig {
+    return {
+      type: "belongsTo",
+      model: Target,
+      foreignKey: fk,
+      localKey: ownerKey,
+    };
+  }
+  belongsToMany(
+    Target: typeof Model,
+    pivot: string,
+    fkPivot: string,
+    relPivot: string,
+    localKey = "id"
+  ): RelationConfig {
+    return {
+      type: "belongsToMany",
+      model: Target,
+      pivotTable: pivot,
+      foreignPivotKey: fkPivot,
+      relatedPivotKey: relPivot,
+      localKey,
+    };
+  }
+  morphOne(Target: typeof Model, name: string): RelationConfig {
+    return { type: "morphOne", model: Target, morphName: name };
+  }
+  morphMany(Target: typeof Model, name: string): RelationConfig {
+    return { type: "morphMany", model: Target, morphName: name };
+  }
+  morphTo(name: string, map: Record<string, typeof Model>): RelationConfig {
+    return {
+      type: "morphTo",
+      morphName: name,
+      modelResolver: (t) => map[t] || null,
+    };
+  }
 
-    const query = `
-    SELECT ${columns ? this.formatColumns(columns) : "*"}
-    FROM \`${this.table}\`
-    WHERE ${whereClause}
-    LIMIT 1
-  `;
+  /* ============================================================
+   * INTERNALS
+   * ============================================================ */
+  private buildSelect(limit?: number, offset?: number) {
+    const { where, values } = this.buildWhere();
+    let sql = `SELECT ${this.formatColumns(this._columns)} FROM \`${
+      this.table
+    }\` ${where}`;
+    if (limit) sql += ` LIMIT ${limit}`;
+    if (offset) sql += ` OFFSET ${offset}`;
+    return { sql, values };
+  }
 
-    const [rows] = await db.query(query, values);
-    return (rows as any[])[0] || null;
+  private buildCount() {
+    const { where, values } = this.buildWhere();
+    const sql = `SELECT COUNT(*) as total FROM \`${this.table}\` ${where}`;
+    return { sql, values };
+  }
+
+  private buildWhere() {
+    const keys = Object.keys(this._conditions);
+    const whereInKeys = Object.keys(this._whereIn);
+    const values: any[] = [];
+  
+    let whereParts: string[] = [];
+  
+    // Normal conditions
+    for (const k of keys) {
+      values.push(this._conditions[k]);
+      whereParts.push(`\`${k}\` = ?`);
+    }
+  
+    // WHERE IN conditions
+    for (const k of whereInKeys) {
+      const vals = this._whereIn[k];
+      if (!vals.length) continue;
+      const placeholders = vals.map(() => "?").join(", ");
+      whereParts.push(`\`${k}\` IN (${placeholders})`);
+      values.push(...vals);
+    }
+  
+    const where = whereParts.length ? "WHERE " + whereParts.join(" AND ") : "";
+    return { where, values };
+  }
+  
+
+  private formatColumns(cols?: string[] | string): string {
+    if (!cols) return "*";
+    if (typeof cols === "string") return cols;
+    return cols.map((c) => `\`${c}\``).join(", ");
+  }
+
+  private resetQuery() {
+    this._conditions = {};
+    this._columns = undefined;
+    this._withRelations = [];
+    this._whereIn = {};
+  }
+
+  /* ============================================================
+   * EAGER-LOAD RELATIONS (fixed for nested relations)
+   * ============================================================ */
+  /* ============================================================
+   * EAGER-LOAD RELATIONS (fixed, TS-safe)
+   * ============================================================ */
+  private async loadRelations(
+    records: any | any[],
+    _withRelations?: WithOption[]
+  ): Promise<any> {
+    if (!records) return records;
+
+    const single = !Array.isArray(records);
+    const data = single ? [records] : records;
+
+    const relations = _withRelations ?? this._withRelations;
+    if (!relations.length) return single ? data[0] : data;
+
+    for (const opt of relations) {
+      const [relName, ...nestedParts] =
+        typeof opt === "string" ? opt.split(".") : [Object.keys(opt)[0]];
+      const columns = typeof opt === "object" ? opt[relName] : undefined;
+
+      for (const row of data) {
+        let target: Model | null = null; // TS-safe
+        let result: any = null;
+
+        const cfg: RelationConfig = (this as any)[relName]?.();
+        if (!cfg) continue;
+
+        switch (cfg.type) {
+          case "hasOne":
+          case "hasMany":
+            target = new cfg.model(cfg.model.name.toLowerCase());
+            result = await target
+              .where({ [cfg.foreignKey!]: row[cfg.localKey || "id"] })
+              .select(columns ?? cfg.columns ?? "*")
+              .get();
+            if (cfg.type === "hasOne") result = result[0] ?? null;
+            break;
+
+          case "belongsTo":
+            target = new cfg.model(cfg.model.name.toLowerCase());
+            const [btRows] = await db.query(
+              `SELECT ${this.formatColumns(columns ?? cfg.columns ?? "*")}
+             FROM \`${target.table}\`
+             WHERE \`${cfg.localKey}\` = ?
+             LIMIT 1`,
+              [row[cfg.foreignKey!]]
+            );
+            result = (btRows as any[])[0] ?? null;
+            break;
+
+          case "belongsToMany":
+            target = new cfg.model(cfg.model.name.toLowerCase());
+            const [btmRows] = await db.query(
+              `SELECT ${this.formatColumns(columns ?? cfg.columns ?? "*")}
+             FROM \`${target.table}\`
+             JOIN \`${cfg.pivotTable}\`
+               ON \`${target.table}\`.id = \`${cfg.pivotTable}\`.\`${
+                cfg.relatedPivotKey
+              }\`
+             WHERE \`${cfg.pivotTable}\`.\`${cfg.foreignPivotKey}\` = ?`,
+              [row[cfg.localKey || "id"]]
+            );
+            result = btmRows as any[];
+            break;
+
+          case "morphOne":
+          case "morphMany":
+            target = new cfg.model(cfg.model.name.toLowerCase());
+            const typeCol = cfg.morphName + "_type";
+            const idCol = cfg.morphName + "_id";
+            const [morphRows] = await db.query(
+              `SELECT ${this.formatColumns(columns ?? cfg.columns ?? "*")}
+             FROM \`${target.table}\`
+             WHERE \`${typeCol}\` = ?
+               AND \`${idCol}\` = ?
+             ${cfg.type === "morphOne" ? "LIMIT 1" : ""}`,
+              [(this as any).constructor.name, row.id]
+            );
+            result =
+              cfg.type === "morphOne"
+                ? (morphRows as any[])[0] ?? null
+                : (morphRows as any[]);
+            break;
+
+          case "morphTo":
+            const type = row[cfg.morphName + "_type"];
+            const id = row[cfg.morphName + "_id"];
+            if (!type || !id) {
+              result = null;
+              break;
+            }
+            const Klass = cfg.modelResolver(type);
+            if (!Klass) {
+              result = null;
+              break;
+            }
+            target = new Klass(Klass.name.toLowerCase());
+            const [rows] = await db.query(
+              `SELECT * FROM \`${target.table}\` WHERE \`id\` = ? LIMIT 1`,
+              [id]
+            );
+            result = (rows as any[])[0] ?? null;
+            break;
+        }
+
+        // Attach result to row
+        row[relName] =
+          result ??
+          (cfg.type === "hasMany" ||
+          cfg.type === "belongsToMany" ||
+          cfg.type === "morphMany"
+            ? []
+            : null);
+
+        // Recurse for nested relations
+        if (nestedParts.length && row[relName]) {
+          const nestedDot = nestedParts.join(".");
+          if (Array.isArray(row[relName])) {
+            for (const item of row[relName]) {
+              if (target) await target.with(nestedDot).loadRelations(item);
+            }
+          } else {
+            if (target)
+              await target.with(nestedDot).loadRelations(row[relName]);
+          }
+        }
+      }
+    }
+
+    return single ? data[0] : data;
   }
 }
