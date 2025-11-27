@@ -14,6 +14,12 @@ interface Route {
   middleware: Middleware[];
 }
 
+interface CachedFile {
+  content: Buffer;
+  mtime: number;
+  mime: string;
+}
+
 interface RouteGroupOptions {
   prefix?: string;
   middleware?: string[]; // names of middleware
@@ -36,8 +42,7 @@ export class Router {
   private static middlewareGroups: Record<string, string[]> = {};
   private static _currentPrefix: string = "";
   private static _currentGroupMiddleware: Middleware[] = [];
-  private static fileCache: Record<string, { content: Buffer; mtime: number }> =
-    {};
+  private static fileCache: Record<string, CachedFile> = {};
   private static routeCache = new Cache<TrieNode>(DEV_MODE);
 
   // ---------------- Named Middleware ----------------
@@ -148,18 +153,39 @@ export class Router {
         return;
       }
 
-      // Normalize URI (remove trailing slash except for root)
-      if (uri !== "/" && uri.endsWith("/")) uri = uri.slice(0, -1);
+      // Separate path and query string
+      let path = uri;
+      let queryString = "";
+      const queryIndex = uri.indexOf("?");
+      if (queryIndex !== -1) {
+        path = uri.slice(0, queryIndex);
+        queryString = uri.slice(queryIndex + 1);
+      }
 
-      const { route, params } = this.searchRoute(methodTrie, uri);
+      // Normalize path (remove trailing slash except for root)
+      if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+
+      // Search route in trie
+      const { route, params } = this.searchRoute(methodTrie, path);
       if (!route) {
         res.statusCode = 404;
         res.end(JSON.stringify({ message: "Route not found" }));
         return;
       }
 
+      // Attach path params
       req.params = params;
 
+      // Parse query parameters
+      req.query = {};
+      if (queryString) {
+        const searchParams = new URLSearchParams(queryString);
+        searchParams.forEach((value, key) => {
+          req.query[key] = value;
+        });
+      }
+
+      // Run middleware chain
       const middlewareChain = [...this.globalMiddleware, ...route.middleware];
       let i = 0;
       const next = () => {
@@ -218,18 +244,57 @@ export class Router {
   static serveFile(filePath: string, req: any, res: any) {
     const fullPath = path.resolve(filePath);
     const stats = fs.statSync(fullPath);
-    const cached = this.fileCache[fullPath];
 
+    // Handle cached file
+    const cached = this.fileCache[fullPath];
     if (cached && cached.mtime === stats.mtimeMs && !DEV_MODE) {
       res.statusCode = 200;
-      res.end(cached.content);
-      return;
+      res.setHeader("Content-Type", cached.mime);
+
+      if (req.method === "HEAD") {
+        return res.end();
+      }
+
+      return res.end(cached.content);
     }
 
+    // Read file
     const content = fs.readFileSync(fullPath);
-    if (!DEV_MODE) this.fileCache[fullPath] = { content, mtime: stats.mtimeMs };
+
+    // Determine MIME
+    const ext = path.extname(fullPath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".svg": "image/svg+xml",
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+      ".ogg": "video/ogg",
+    };
+
+    const mime = mimeMap[ext] || "application/octet-stream";
+    res.setHeader("Content-Type", mime);
+
+    // Save to cache
+    if (!DEV_MODE) {
+      this.fileCache[fullPath] = {
+        content,
+        mtime: stats.mtimeMs,
+        mime,
+      };
+    }
 
     res.statusCode = 200;
+
+    // HEAD request → only send headers
+    if (req.method === "HEAD") {
+      return res.end();
+    }
+
+    // Send file content
     res.end(content);
   }
 }

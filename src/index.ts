@@ -8,12 +8,13 @@ import http from "http";
 import "./routes/api";
 import "./routes/admin";
 import "./routes/vendor";
+import "./routes/user";
 import { Router } from "./core/Router";
 import path from "path";
 
 const PORT = process.env.PORT || 3000;
 
-const server = http.createServer((req, res) => {
+export const server = http.createServer((req, res) => {
   if (!req.url || !req.method) return;
 
 
@@ -32,6 +33,8 @@ const server = http.createServer((req, res) => {
   Router.dispatch(req.url, req.method, req, res);
 });
 
+
 server.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
+

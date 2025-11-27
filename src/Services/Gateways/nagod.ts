@@ -1,9 +1,9 @@
-import { route } from "../../Helper/Helpers";
+import { getIp, route } from "../../Helper/Helpers";
 import { Nagod } from "../../Helper/nagod";
 import axios from "axios";
 
 export class Payment extends Nagod {
-  public static async prepareData(payment: any, gateway: any) {
+  public static async prepareData(payment: any, gateway: any,ip: string) {
     const _this = new this();
     if (!gateway.merchant_id) {
       throw new Error("Unable to process with nagad.");
@@ -33,7 +33,7 @@ export class Payment extends Nagod {
           JSON.stringify(sensitiveData)
         ),
       },
-      { headers: _this.headers() }
+      { headers: _this.headers(ip) }
     );
 
     if (initResponse.status !== 200) {
@@ -69,10 +69,10 @@ export class Payment extends Nagod {
           gateway,
           JSON.stringify(sensitiveOrderData)
         ),
-        merchantCallbackURL: route(`/ipn?nagad&trx=${payment.trx_id}`),
+        merchantCallbackURL: route(`ipn?nagad&trx=${payment.trx_id}`),
         additionalMerchantInfo: additionalInfo ?? {},
       },
-      { headers: _this.headers() }
+      { headers: _this.headers(ip) }
     );
 
     if (completeResponse.status !== 200) {
@@ -127,7 +127,8 @@ export class Payment extends Nagod {
     ) {
         const verifyPaymentResponse: any = await _this.verifyPayment(
             gateway,
-            request.payment_ref_id
+            request.payment_ref_id,
+            getIp(request)
         );
 
         if (
@@ -153,14 +154,14 @@ export class Payment extends Nagod {
 
 
   // Verify payment
-  public async verifyPayment(gateway: any, paymentId: string) {
+  public async verifyPayment(gateway: any, paymentId: string,ip: string) {
     if (!this.getBaseUrl() || !gateway?.merchant_id) {
         throw new Error("Unable to process with nagad.");
     }
 
     const response = await axios.get(
         `${this.getBaseUrl()}/verify/payment/${paymentId}`,
-        { headers: this.headers() }
+        { headers: this.headers(ip) }
     );
 
     if (response.status === 200) {
@@ -177,16 +178,17 @@ public static async refund(
     deposit: any,
     refNo: string,
     gateway: any,
-    amount: number
+    amount: number,
+    ip: string
 ) {
     const _this = new this();
 
-    if (!_this.getBaseUrl() || !gateway.parameters?.merchant_id) {
+    if (!_this.getBaseUrl() || !gateway?.merchant_id) {
         throw new Error("Unable to process with nagad.");
     }
 
     const sensitiveOrderData = {
-        merchantId: gateway.parameters.merchant_id,
+        merchantId: gateway.merchant_id,
         originalRequestDate: new Date()
             .toISOString()
             .slice(0, 10)
@@ -209,7 +211,7 @@ public static async refund(
                 JSON.stringify(sensitiveOrderData)
             )
         },
-        { headers: _this.headers() }
+        { headers: _this.headers(ip) }
     );
 
     if (response.status === 200) {

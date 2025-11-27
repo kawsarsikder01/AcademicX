@@ -1,6 +1,7 @@
 import { Request } from "../core/Request";
 import { DateTime } from "luxon";
 import crypto from "crypto";
+import forge from "node-forge";
 
 export class Nagod {
   protected CHALLANGE: any;
@@ -10,10 +11,10 @@ export class Nagod {
     return process.env.NAGOD_BASE_URL;
   }
 
-  protected headers(): Record<string, string> {
+  protected headers(ip: string): Record<string, string> {
     return {
       "Content-Type": "application/json",
-      "X-KM-IP-V4": Request.current().ip,
+      "X-KM-IP-V4": ip,
       "X-KM-Api-Version": "v-0.2.0",
       "X-KM-Client-Type": "PC_WEB",
     };
@@ -59,9 +60,7 @@ export class Nagod {
   }
 
   public signatureGenerate(gateway: any, data: string): string {
-    const merchantPrivateKey = gateway.private_key;
-
-    const privateKey = `-----BEGIN RSA PRIVATE KEY-----\n${merchantPrivateKey}\n-----END RSA PRIVATE KEY-----`;
+    const privateKey = `-----BEGIN RSA PRIVATE KEY-----\n${gateway.private_key}\n-----END RSA PRIVATE KEY-----`;
 
     const sign = crypto.createSign("RSA-SHA256");
     sign.update(data);
@@ -72,20 +71,16 @@ export class Nagod {
   }
 
   public decryptDataWithPrivateKey(gateway: any, crypttext: string): string {
-    const merchantPrivateKey = gateway.private_key;
-    const privateKey = `-----BEGIN RSA PRIVATE KEY-----\n${merchantPrivateKey}\n-----END RSA PRIVATE KEY-----`;
+    const privateKeyPem = `-----BEGIN RSA PRIVATE KEY-----\n${gateway.private_key}\n-----END RSA PRIVATE KEY-----`;
 
-    const buffer = Buffer.from(crypttext, "base64");
-    const plainText = crypto.privateDecrypt(
-      {
-        key: privateKey,
-        padding: crypto.constants.RSA_PKCS1_PADDING,
-      },
-      buffer
-    );
-    return plainText.toString("utf-8");
+    const privateKey = forge.pki.privateKeyFromPem(privateKeyPem);
+
+    const decoded = Buffer.from(crypttext, "base64").toString("binary");
+
+    const decrypted = privateKey.decrypt(decoded, "RSAES-PKCS1-V1_5");
+
+    return decrypted;
   }
-
   // Decrypt initial response
   protected decryptInitialResponse(gateway: any, response: any): boolean {
     const plainResponse = JSON.parse(
@@ -101,33 +96,21 @@ export class Nagod {
   }
 
   public encryptDataWithPublicKey(gateway: any, data: string): string {
-    const pgPublicKey = gateway.public_key;
-    const publicKey = `-----BEGIN PUBLIC KEY-----\n${pgPublicKey}\n-----END PUBLIC KEY-----`;
+    const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${gateway.public_key}\n-----END PUBLIC KEY-----`;
 
-    const buffer = Buffer.from(data);
-    const encrypted = crypto.publicEncrypt(
-      {
-        key: publicKey,
-        padding: crypto.constants.RSA_PKCS1_PADDING,
-      },
-      buffer
-    );
+    const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
 
-    return encrypted.toString("base64");
+    const encrypted = publicKey.encrypt(data, "RSAES-PKCS1-V1_5");
+
+    return Buffer.from(encrypted, "binary").toString("base64");
   }
 
-  public updateAndMessage(
-    note: string,
-    status: string,
-    msg: string
-  ) {
-     
-
+  public updateAndMessage(note: string, status: string, msg: string) {
     const data = {
       status: status.toLowerCase(),
       msg: msg,
-      redirect: "failed", 
-      note : note
+      redirect: "failed",
+      note: note,
     };
 
     return data;

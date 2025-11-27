@@ -161,6 +161,32 @@ export class Model {
     return this.find((res as any).insertId);
   }
 
+  async createMultiple(rows: Record<string, any>[]): Promise<boolean> {
+    if (!rows.length) return false;
+
+    try {
+      const keys = Object.keys(rows[0]);
+      const placeholders = rows
+        .map(() => `(${keys.map(() => "?").join(", ")})`)
+        .join(", ");
+      const values: any[] = [];
+
+      rows.forEach((row) => {
+        keys.forEach((key) => values.push(row[key]));
+      });
+
+      const sql = `INSERT INTO \`${this.table}\` (${keys
+        .map((k) => `\`${k}\``)
+        .join(", ")}) VALUES ${placeholders}`;
+      await db.query(sql, values);
+
+      return true;
+    } catch (err) {
+      console.error("Insert failed:", err);
+      return false;
+    }
+  }
+
   async update(id: number | string, data: Record<string, any>, pk = "id") {
     const set = Object.keys(data)
       .map((k) => `\`${k}\` = ?`)
@@ -286,15 +312,15 @@ export class Model {
     const keys = Object.keys(this._conditions);
     const whereInKeys = Object.keys(this._whereIn);
     const values: any[] = [];
-  
+
     let whereParts: string[] = [];
-  
+
     // Normal conditions
     for (const k of keys) {
       values.push(this._conditions[k]);
       whereParts.push(`\`${k}\` = ?`);
     }
-  
+
     // WHERE IN conditions
     for (const k of whereInKeys) {
       const vals = this._whereIn[k];
@@ -303,11 +329,10 @@ export class Model {
       whereParts.push(`\`${k}\` IN (${placeholders})`);
       values.push(...vals);
     }
-  
+
     const where = whereParts.length ? "WHERE " + whereParts.join(" AND ") : "";
     return { where, values };
   }
-  
 
   private formatColumns(cols?: string[] | string): string {
     if (!cols) return "*";

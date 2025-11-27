@@ -10,5 +10,10 @@ export class Controller {
     res.setHeader("Content-Type", "text/plain");
     res.end(data);
   }
+
+  redirect(res: any, url: string){
+    res.writeHead(302, { Location: url });
+    res.end();
+  }
 }
               

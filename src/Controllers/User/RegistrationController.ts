@@ -12,13 +12,19 @@ const fileSchema = z.object({
   }).optional();
 
 
-const RegisterSchema = z.object({
-  name: z.string().min(1, "Vendor name is required"),
-  email: z.string().email().nullable(),
-  image: fileSchema.optional(),
-  status: z.string().optional().default('active'),
-  password: z.string().min(6, "Password must be at least 6 characters long."),
-});
+  const RegisterSchema = z
+  .object({
+    name: z.string().min(1, "Name is required"),
+    email: z.string().email().nullable(),
+    image: fileSchema.optional(),
+    status: z.string().optional().default("active"),
+    password: z.string().min(6, "Password must be at least 6 characters long."),
+    confirmPassword: z.string().min(6, "Confirm password is required."),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"], // field to show the error on
+  });
 
 interface UserData {
     name: string;
