@@ -48,9 +48,9 @@ export class CourseController extends Controller {
   async index(request: Request, response: Response) {
 
     const courses = await this.course
-      .with("vendor", "thumbnail")
+      .with("vendor", "thumbnail","category")
       .where({ status: "published", course_type: "recorded" })
-      .paginate();
+      .paginate(); 
 
     return this.json(response, courses);
   }

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import multer from "multer";
 import { ServerResponse } from "http";
+import crypto from "crypto";
 
 // ------------------ Configuration ------------------
 const ACTIVE_DISK = process.env.ACTIVE_DISK || "local"; // local | s3
@@ -12,6 +13,14 @@ if (ACTIVE_DISK === "local" && !fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+const generateRandomText = (length = 12) => {
+  return crypto
+    .randomBytes(length)
+    .toString("hex")
+    .toUpperCase()
+    .slice(0, length);
+};
+
 // ------------------ Multer Setup (only for local) ------------------
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
@@ -21,8 +30,16 @@ const storage = multer.diskStorage({
   },
 });
 
-export const upload =
-  ACTIVE_DISK === "local" ? multer({ storage }) : undefined;
+export const upload = ACTIVE_DISK === "local" ? multer({ storage }) : undefined;
+
+function getFileExtension(filename: string): string | null {
+  const parts = filename.split('.');
+  if (parts.length > 1) {
+    return parts.pop() || null; // last part is the extension
+  }
+  return null; // no extension
+}
+
 
 // ------------------ File Operations ------------------
 export const saveFile = async (
@@ -32,30 +49,42 @@ export const saveFile = async (
 
   // Multer DiskStorage
   if ("path" in file && file.path) {
-    const relativePath = path.relative(UPLOAD_DIR, file.path).replace(/\\/g, "/");
+    
+    const relativePath = path
+      .relative(UPLOAD_DIR, file.path)
+      .replace(/\\/g, "/");
     return { path: relativePath, driver: ACTIVE_DISK };
   }
 
   // Multer MemoryStorage
   if ("buffer" in file && file.buffer) {
-    const filePath = path.join(UPLOAD_DIR, Date.now() + "-" + file.originalname);
+    const filePath = path.join(
+      UPLOAD_DIR,
+      Date.now() + "_" + generateRandomText()+'.'+getFileExtension(file.originalFilename)
+    );
     fs.writeFileSync(filePath, file.buffer);
-    const relativePath = path.relative(UPLOAD_DIR, filePath).replace(/\\/g, "/");
+
+    const relativePath = path
+      .relative(UPLOAD_DIR, filePath)
+      .replace(/\\/g, "/");
     return { path: relativePath, driver: ACTIVE_DISK };
   }
 
   // PersistentFile (formidable, etc)
   if ("filepath" in file && "originalFilename" in file) {
-    const destPath = path.join(UPLOAD_DIR, Date.now() + "-" + file.originalFilename);
+    const destPath = path.join(
+      UPLOAD_DIR,
+      Date.now() + "_" + generateRandomText()+'.'+getFileExtension(file.originalFilename)
+    );
     fs.copyFileSync(file.filepath, destPath);
-    const relativePath = path.relative(UPLOAD_DIR, destPath).replace(/\\/g, "/");
+    const relativePath = path
+      .relative(UPLOAD_DIR, destPath)
+      .replace(/\\/g, "/");
     return { path: relativePath, driver: ACTIVE_DISK };
   }
 
   throw new Error("Invalid file object");
 };
-
-
 export const deleteFile = (fileUrlOrPath: string) => {
   if (ACTIVE_DISK === "local") {
     try {
@@ -93,10 +122,9 @@ export const getFile = (filePathOrUrl: string) => {
         name: path.basename(fullPath),
         size: stats.size,
         extension: path.extname(fullPath),
-        url: `${BASE_URL}/uploads/${path.relative(UPLOAD_DIR, fullPath).replace(
-          /\\/g,
-          "/"
-        )}`,
+        url: `${BASE_URL}/uploads/${path
+          .relative(UPLOAD_DIR, fullPath)
+          .replace(/\\/g, "/")}`,
       };
     } catch (error) {
       console.error("Get file error:", error);

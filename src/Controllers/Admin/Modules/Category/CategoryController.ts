@@ -44,7 +44,7 @@ export class CategoryController extends Controller {
 
   async update(request: Request, response: Response, id: number) {
     
-    const category = this.categoryModel.findOne({ id: id });
+    const category = await this.categoryModel.findOne({ id: id });
 
     if (!category) {
       return this.json(response, "Category Not Found", 404);

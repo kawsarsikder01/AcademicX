@@ -47,14 +47,14 @@ const lessonSchema = z.object({
   live_start_time: z.string().datetime().optional(),
   live_end_time: z.string().datetime().optional(),
   position: z.number().optional(),
-  quiz: quizSchema.optional(), // single quiz object
+  quiz: quizSchema.nullable().optional(), 
 });
 
 const courseSchema = z.object({
   title: z.string().min(3).max(255),
   slug: z.string().min(3).max(255).optional(),
   description: z.string().optional(),
-  category: z.number(),
+  category: z.string(),
   thumbnail: fileSchema.optional(),
   driver: z.string().max(20).optional(),
   price: z.coerce.number().nonnegative().default(0.0),
@@ -63,9 +63,12 @@ const courseSchema = z.object({
   start_date: z.string().datetime().optional(),
   end_date: z.string().datetime().optional(),
   enrollment_close_date: z.string().datetime().optional(),
-  streaming_server: z.enum(["internal", "external"]).default("internal"),
+  streamType: z.enum(["internal", "external"]).default("internal"),
   status: z.enum(["draft", "pending", "published", "rejected"]).default("draft"),
   lessons: z.array(lessonSchema).optional(),
+  introVideoUrl: z.string().nullable(),
+  course_overview: z.string().min(50),
+  total_hours: z.string()
 });
 
 // --------------------------
@@ -112,8 +115,8 @@ export class CourseController extends Controller {
       if (files.thumbnail?.[0]) {
         const savedThumb = await saveFile(files.thumbnail[0]);
         await this.mediaModel.create({
-          model_type: "course",
-          model_id: courseId,
+          mediable_type: "course",
+          mediable_id: courseId,
           file_path: savedThumb.path,
           file_type: "image",
           storage_type: savedThumb.driver ?? "local",
@@ -128,8 +131,8 @@ export class CourseController extends Controller {
           if (files[`lessonVideo_${index}`]?.[0]) {
             const savedVideo = await saveFile(files[`lessonVideo_${index}`][0]);
             await this.mediaModel.create({
-              model_type: "lesson",
-              model_id: lessonId,
+              mediable_type: "lesson",
+              mediable_id: lessonId,
               file_path: savedVideo.path,
               file_type: "video",
               storage_type: savedVideo.driver ?? "local",
@@ -208,8 +211,9 @@ export class CourseController extends Controller {
     const formatted = {
       vendor_id: vendorId,
       title: data.title,
-      slug: data.slug || this.generateSlug(data.title),
+      slug: await this.generateSlug(data.title),
       description: data.description ?? null,
+      course_overview: data.course_overview ?? null,
       category_id: data.category ?? null,
       driver: data.driver ?? "local",
       price: data.price ?? 0.0,
@@ -218,8 +222,10 @@ export class CourseController extends Controller {
       start_date: data.start_date ?? null,
       end_date: data.end_date ?? null,
       enrollment_close_date: data.enrollment_close_date ?? null,
-      streaming_server: data.streaming_server,
+      streaming_server: data.streamType,
       status: "pending",
+      introVideoUrl: data.introVideoUrl,
+      total_hour: data.total_hours,
     };
     const course = await this.courseModel.create(formatted);
     return course.id;
@@ -268,8 +274,8 @@ export class CourseController extends Controller {
     }
   }
 
-  private generateSlug(text: string) {
-    return text
+  private async generateSlug(text: string) {
+    let slug = text
       .toString()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -278,5 +284,18 @@ export class CourseController extends Controller {
       .replace(/[^a-z0-9\s-]/g, "")
       .replace(/\s+/g, "-")
       .replace(/-+/g, "-");
+
+      // Step 2: Initialize counter
+    let uniqueSlug = slug;
+    let counter = 1;
+
+    // Step 3: Keep checking until the slug is unique
+    while (await this.courseModel.findOne({ slug: uniqueSlug })) {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+
+    // Step 4: Return the unique slug
+    return uniqueSlug;
   }
 }

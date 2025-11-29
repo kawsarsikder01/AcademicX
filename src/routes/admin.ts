@@ -1,6 +1,7 @@
 
 import { LoginController } from "../Controllers/Admin/Auth/LoginController";
 import { CategoryController } from "../Controllers/Admin/Modules/Category/CategoryController";
+import CourseController from "../Controllers/Admin/Modules/Course/CourseController";
 import { SettingsController } from "../Controllers/Admin/Modules/Settings/SettingsController";
 import { VendorController } from "../Controllers/Admin/Modules/Vendor/VendorController";
 import { Router } from "../core/Router";
@@ -21,5 +22,8 @@ Router.group({ prefix: "api/admin" }, () => {
     Router.get("categories",[CategoryController,'index']);
     Router.post("create/category",[CategoryController,'store']);
     Router.put("update/category/:id",[CategoryController,'update']);
+
+    Router.get('courses',[CourseController,"index"]);
+    Router.put('update/course/status',[CourseController,"updateStatus"]);
   });
 });
