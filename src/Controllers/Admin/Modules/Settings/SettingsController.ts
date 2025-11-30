@@ -10,9 +10,9 @@ const SettingSchema = z.object({
   site_address: z.string().nullable(),
   base_currency: z.string().min(1, "Base currency is required"),
   currency_symbol: z.string().min(1, "Currency symbol is required"),
-  tax_percentage: z
+  site_charge: z
     .string()
-    .regex(/^\d+(\.\d{1,2})?$/, "Invalid tax percentage"),
+    .regex(/^\d+(\.\d{1,2})?$/, "Invalid site charge"),
   currency_position: z.enum(["left", "right"]).default("right"),
   has_space: z.boolean().nullable(),
   email_notifications: z.enum(["enabled", "disabled"]).default("enabled"),
@@ -75,10 +75,13 @@ export class SettingsController extends Controller {
       if (site_favicon_url) deleteFile(site_favicon_url);
     }
 
-    await this.settingsModel.update(settings.id, data);
+     const setting = await this.settingsModel.update(settings.id, data);
 
     
 
-    return this.json(response, "Update settings successfully");
+    return this.json(response, {
+      message: "Update settings successfully",
+      data: setting
+    });
   }
 }

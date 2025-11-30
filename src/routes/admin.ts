@@ -23,7 +23,12 @@ Router.group({ prefix: "api/admin" }, () => {
     Router.post("create/category",[CategoryController,'store']);
     Router.put("update/category/:id",[CategoryController,'update']);
 
+    //course
     Router.get('courses',[CourseController,"index"]);
     Router.put('update/course/status',[CourseController,"updateStatus"]);
+
+    //settings
+    Router.get('settings',[SettingsController,"index"]);
+    Router.put('update/settings',[SettingsController,"update"]);
   });
 });
