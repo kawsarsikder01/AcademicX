@@ -1,5 +1,6 @@
 import { Vendor } from "../../../../Models/Vendor";
 import { Controller } from "../../../Controller";
+import { Request } from "../../../../Middleware/JsonParser";
 
 export class VendorController extends Controller {
   private vendorModel: Vendor;
@@ -30,5 +31,26 @@ export class VendorController extends Controller {
 
     await this.vendorModel.update(id, { verification_status: "rejected" });
     return this.json(response, "Vendor rejected successfully");
+  }
+
+  async updateStatus(
+    request: Request<{ status: string }>,
+    response: Response,
+    id: number | string
+  ) {
+    const vendor = await this.vendorModel.findOne({ id: { id } });
+    if (!vendor) return this.json(response, "Vendor Not Found", 404);
+
+    const { status } = request.body;
+
+    // validate allowed statuses
+    const allowed = [ "approved", "rejected","blocked"];
+    if (!allowed.includes(status)) {
+      return this.json(response, "Invalid status value", 400);
+    }
+
+    await this.vendorModel.update(id, { verification_status: status });
+
+    return this.json(response, `Vendor ${status} successfully`);
   }
 }
