@@ -103,24 +103,31 @@ export class Model {
 
   async paginate(defaultPerPage = 10) {
     const req = Request.current();
+  
     const page = Math.max(1, Number(req.query.get("page") || 1));
     const perPage = Math.max(
       1,
       Number(req.query.get("perPage") || defaultPerPage)
     );
     const offset = (page - 1) * perPage;
-
+  
     const { sql: cntSql, values: cntVals } = this.buildCount();
     const [cntRows] = await db.query(cntSql, cntVals);
     const total = (cntRows as any[])[0].total;
     const lastPage = Math.ceil(total / perPage);
-
+  
     const { sql, values } = this.buildSelect(perPage, offset);
     const [rows] = await db.query(sql, values);
     const data = await this.loadRelations(rows as any[]);
     this.resetQuery();
-
-    const base = (process.env.BASE_URL || "").replace(/\/$/, "");
+  
+    // Use full URL provided by Request.ts
+    const fullUrl = req.fullUrl;
+    const urlObj = new URL(fullUrl);
+  
+    // Build proper base URL: protocol + host + pathname
+    const baseUrl = `${urlObj.origin}${urlObj.pathname}`;
+  
     return {
       data,
       pagination: {
@@ -130,13 +137,16 @@ export class Model {
         lastPage,
         nextPageUrl:
           page < lastPage
-            ? `${base}?page=${page + 1}&perPage=${perPage}`
+            ? `${baseUrl}?page=${page + 1}&perPage=${perPage}`
             : null,
         prevPageUrl:
-          page > 1 ? `${base}?page=${page - 1}&perPage=${perPage}` : null,
+          page > 1
+            ? `${baseUrl}?page=${page - 1}&perPage=${perPage}`
+            : null,
       },
     };
   }
+  
 
   /* ============================================================
    * CRUD

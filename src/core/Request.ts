@@ -49,6 +49,11 @@ class Request {
   get body(): any {
     return (this.req as any).body;
   }
+  get fullUrl(): string {
+    const protocol = this.req.headers["x-forwarded-proto"] || "http";
+    const host = this.req.headers.host;
+    return `${protocol}://${host}${this.req.url}`;
+  }
 }
 
 export { Request };
