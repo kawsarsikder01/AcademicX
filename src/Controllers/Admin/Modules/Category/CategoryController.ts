@@ -106,5 +106,4 @@ export class CategoryController extends Controller {
 
     // Step 4: Return the unique slug
     return uniqueSlug;
-  }
-}
+  
