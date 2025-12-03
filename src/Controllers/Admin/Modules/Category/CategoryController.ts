@@ -4,7 +4,7 @@ import { Controller } from "../../../Controller";
 
 const CategorySchema = z.object({
   name: z.string().min(1, "Category name is required"),
-  status: z.number().nullable().default(1)
+  status: z.number().nullable().default(1),
 });
 
 export class CategoryController extends Controller {
@@ -36,14 +36,12 @@ export class CategoryController extends Controller {
       slug: await this.generateSlug(validate.data.name),
     };
 
-   
-     const category = await this.categoryModel.create(data); 
+    const category = await this.categoryModel.create(data);
 
     return this.json(response, "Category create successfully");
   }
 
   async update(request: Request, response: Response, id: number) {
-    
     const category = await this.categoryModel.findOne({ id: id });
 
     if (!category) {
@@ -63,11 +61,10 @@ export class CategoryController extends Controller {
     const data = {
       name: validate.data.name,
       slug: await this.generateSlug(validate.data.name),
-      status: validate.data.status
+      status: validate.data.status,
     };
 
     await this.categoryModel.update(id, data);
-
 
     return this.json(response, "Category update successfully");
   }
@@ -106,4 +103,5 @@ export class CategoryController extends Controller {
 
     // Step 4: Return the unique slug
     return uniqueSlug;
-  
+  }
+}

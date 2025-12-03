@@ -6,7 +6,7 @@ import { IncomingMessage } from "http";
 export class Payment {
   public static async prepareData(payment: any, gateway: any) {
     let amount = Math.round(payment.amount * 100);
-    const stripe = new Stripe("sk_test_aat3tzBCCXXBkS4sxY3M8A1B", {
+    const stripe = new Stripe(process.env.STRIPE_API_KEY || "", {
       apiVersion: "2025-11-17.clover",
     });
 
@@ -39,7 +39,7 @@ export class Payment {
   }
 
   public static async ipn(req: IncomingMessage, gateway: any, payment: any = null) {
-    const stripe = new Stripe("sk_test_aat3tzBCCXXBkS4sxY3M8A1B", {
+    const stripe = new Stripe(process.env.STRIPE_API_KEY || "", {
       apiVersion: "2025-11-17.clover",
     });
 

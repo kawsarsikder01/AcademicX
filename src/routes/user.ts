@@ -1,6 +1,7 @@
 import { LoginController } from "../Controllers/User/LoginController";
 import { RegistrationController } from "../Controllers/User/RegistrationController";
 import { PaymentController } from "../Controllers/Web/PaymentController";
+import { StudentController } from "../Controllers/Web/StudentController";
 import { auth } from "../Middleware/UserAuth";
 import { Router } from "../core/Router";
 
@@ -13,5 +14,6 @@ Router.group({prefix: 'api/user'},function(){
     
     Router.group({middleware:["user"]},function(){
         Router.post('checkout',[PaymentController,"createPayment"]);
+        Router.get('profile',[StudentController,"index"]);
     })
 })
